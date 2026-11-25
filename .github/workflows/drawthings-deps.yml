@@ -1,0 +1,67 @@
+
+name: Draw Things SDK - Collect Dependencies
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out pinned official SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/drawthingsai/media-generation-kit.git SDK
+          git -C SDK checkout 8868a9685d9c299816f43ef53efd455ffca437f0
+          test "$(git -C SDK rev-parse HEAD)" = "8868a9685d9c299816f43ef53efd455ffca437f0"
+          grep -q d473a2f148b3e7dc9b90d0b7cfccc5cda999eb66 SDK/Package.swift
+          swift --version
+
+      - name: Download and lock SwiftPM dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd SDK && swift package resolve) 2>&1 | tee swiftpm-resolve.log
+          test -s SDK/Package.resolved
+          test -d SDK/.build/checkouts
+
+      - name: Create source dependency ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/MediaGenerationKit bundle/Dependencies
+          rsync -a --exclude=.git --exclude=.build SDK/ bundle/MediaGenerationKit/
+          rsync -a --exclude=.git SDK/.build/checkouts/ bundle/Dependencies/
+          if test -d SDK/.build/artifacts; then
+            mkdir -p bundle/SwiftPM_Artifacts
+            rsync -a SDK/.build/artifacts/ bundle/SwiftPM_Artifacts/
+          fi
+          cp swiftpm-resolve.log bundle/
+          printf 'SDK commit: 8868a9685d9c299816f43ef53efd455ffca437f0\nCommunity commit: d473a2f148b3e7dc9b90d0b7cfccc5cda999eb66\nThis archive collects resolved sources. Local path rewiring and offline Xcode compilation are not yet verified.\n' > bundle/README.txt
+          find bundle/Dependencies -mindepth 1 -maxdepth 1 -type d -print | sort > bundle/DEPENDENCY_LIST.txt
+          (cd bundle && find . -type f ! -name SHA256SUMS.txt -print0 | xargs -0 shasum -a 256) > bundle/SHA256SUMS.txt
+          du -sh bundle
+          (cd bundle && zip -qry ../DrawThings_SDK_AllSources.zip .)
+          ls -lh DrawThings_SDK_AllSources.zip
+
+      - name: Upload dependency ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrawThings_SDK_AllSources
+          path: DrawThings_SDK_AllSources.zip
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload log if available
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrawThings_Resolve_Log
+          path: swiftpm-resolve.log
+          if-no-files-found: ignore
+          retention-days: 7
